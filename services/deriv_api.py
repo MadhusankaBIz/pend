@@ -91,27 +91,60 @@ class DerivAPI:
             return float(resp["balance"]["balance"])
         return 0.0
 
-    async def buy_contract(self, symbol, amount, multiplier, limit_order):
-        """Place a multiplier contract (requires auth)."""
+    # async def buy_contract(self, symbol, amount, multiplier, limit_order):
+    #     """Place a multiplier contract (requires auth)."""
+    #     if not self.authorized:
+    #         raise Exception("Not authorized")
+    #     proposal = await self._send({
+    #         "proposal": 1,
+    #         "amount": amount,
+    #         "basis": "stake",
+    #         "contract_type": "MULTUP",
+    #         "currency": "USD",
+    #         "symbol": symbol,
+    #         "multiplier": multiplier,
+    #         "limit_order": limit_order,
+    #     })
+    #     if "error" in proposal:
+    #         return None
+    #     proposal_id = proposal["proposal"]["id"]
+    #     response = await self._send({"buy": proposal_id, "price": amount})
+    #     if "error" in response:
+    #         return None
+    #     return response.get("buy", {})
+    
+    async def buy_contract(self, symbol, amount, multiplier, contract_type="MULTUP", limit_order=None):
+    
         if not self.authorized:
             raise Exception("Not authorized")
-        proposal = await self._send({
-            "proposal": 1,
-            "amount": amount,
-            "basis": "stake",
-            "contract_type": "MULTUP",
-            "currency": "USD",
-            "symbol": symbol,
-            "multiplier": multiplier,
-            "limit_order": limit_order,
-        })
-        if "error" in proposal:
+        
+        # Direct buy (no proposal) - like working Colab code
+        buy_msg = {
+            "buy": 1,
+            "price": amount,
+            "parameters": {
+                "contract_type": "MULTUP",  # Will be set by executor
+                "symbol": symbol,
+                "amount": amount,
+                "basis": "stake",
+                "currency": "USD",
+                "multiplier": multiplier,
+                "limit_order": {
+                    "stop_loss": round(abs(limit_order["stop_loss"]), 2),   # Positive value
+                    "take_profit": round(abs(limit_order["take_profit"]), 2)
+                }
+            }
+        }
+        
+        print(f"[API] Buying contract...")
+        response = await self._send(buy_msg)
+        
+        if 'error' in response:
+            print(f"[API] ❌ Buy error: {response['error']}")
             return None
-        proposal_id = proposal["proposal"]["id"]
-        response = await self._send({"buy": proposal_id, "price": amount})
-        if "error" in response:
-            return None
-        return response.get("buy", {})
+        
+        print(f"[API] ✅ Buy successful!")
+        return response.get('buy', {})
 
     async def subscribe_portfolio(self, callback):
         """Subscribe to portfolio updates (requires auth)."""

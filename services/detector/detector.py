@@ -1,105 +1,105 @@
-# """
-# services/detector/detector.py
-# =============================
-# Watches 30-minute candles and emits trade signals when a bearish →
-# bullish → bearish‑doji pattern (010) appears.  Uses the doji threshold
-# from shared/config.py.
-# """
+"""
+services/detector/detector.py
+=============================
+Watches 30-minute candles and emits trade signals when a bearish →
+bullish → bearish‑doji pattern (010) appears.  Uses the doji threshold
+from shared/config.py.
+"""
 
-# import asyncio
-# from datetime import datetime
-# from shared.mongo_client import MongoDB
-# from shared.calculator import is_bullish, is_doji
+import asyncio
+from datetime import datetime
+from shared.mongo_client import MongoDB
+from shared.calculator import is_bullish, is_doji
 
-# class PatternDetector:
-#     def __init__(self):
-#         self.active_patterns = {}
-#         self.db = MongoDB()
+class PatternDetector:
+    def __init__(self):
+        self.active_patterns = {}
+        self.db = MongoDB()
 
-#     async def check_new_pattern(self):
-#         """
-#         Called on each new 30‑minute candle.  Looks at the last two
-#         completed candles (oldest = c1, newest = c2) and, if they form
-#         a bearish→bullish sequence (0→1), registers the pattern as
-#         "waiting for doji".  The pattern key is the timestamp of c2.
-#         """
-#         candles = self.db.get_last_30m_candles(2)
-#         if len(candles) < 2:
-#             return
+    async def check_new_pattern(self):
+        """
+        Called on each new 30‑minute candle.  Looks at the last two
+        completed candles (oldest = c1, newest = c2) and, if they form
+        a bearish→bullish sequence (0→1), registers the pattern as
+        "waiting for doji".  The pattern key is the timestamp of c2.
+        """
+        candles = self.db.get_last_30m_candles(2)
+        if len(candles) < 2:
+            return
 
-#         c1, c2 = candles[-2], candles[-1]  # c1 is older
-#         # Bearish → Bullish (010 start)
-#         if not is_bullish(c1) and is_bullish(c2):
-#             pattern_id = c2["window_start"]
-#             self.active_patterns[pattern_id] = {"c1": c1, "c2": c2}
-#             print(f"[DETECTOR] New 010 pattern started at {pattern_id}")
+        c1, c2 = candles[-2], candles[-1]  # c1 is older
+        # Bearish → Bullish (010 start)
+        if not is_bullish(c1) and is_bullish(c2):
+            pattern_id = c2["window_start"]
+            self.active_patterns[pattern_id] = {"c1": c1, "c2": c2}
+            print(f"[DETECTOR] New 010 pattern started at {pattern_id}")
 
-#     async def monitor_active_patterns(self):
-#         """
-#         For each pattern previously started, evaluate the next 30‑minute
-#         candle (c3).  The pattern completes successfully if c3 is
-#         bearish and a doji.  If so, insert a trade signal and remove
-#         the pattern.  Otherwise, the pattern is discarded.
-#         """
-#         c3_list = self.db.get_last_30m_candles(1)
-#         if not c3_list:
-#             return
-#         c3 = c3_list[0]
-#         to_remove = []
+    async def monitor_active_patterns(self):
+        """
+        For each pattern previously started, evaluate the next 30‑minute
+        candle (c3).  The pattern completes successfully if c3 is
+        bearish and a doji.  If so, insert a trade signal and remove
+        the pattern.  Otherwise, the pattern is discarded.
+        """
+        c3_list = self.db.get_last_30m_candles(1)
+        if not c3_list:
+            return
+        c3 = c3_list[0]
+        to_remove = []
 
-#         for pid, pat in self.active_patterns.items():
-#             c2 = pat["c2"]
-#             # Only evaluate when a new candle forms after c2
-#             if c3["window_start"] <= c2["window_start"]:
-#                 continue
+        for pid, pat in self.active_patterns.items():
+            c2 = pat["c2"]
+            # Only evaluate when a new candle forms after c2
+            if c3["window_start"] <= c2["window_start"]:
+                continue
 
-#             # Require the doji candle to be bearish (close ≤ open)
-#             if is_bullish(c3):
-#                 print(f"[DETECTOR] Pattern {pid}: c3 bullish → discarded")
-#                 to_remove.append(pid)
-#                 continue
+            # Require the doji candle to be bearish (close ≤ open)
+            if is_bullish(c3):
+                print(f"[DETECTOR] Pattern {pid}: c3 bullish → discarded")
+                to_remove.append(pid)
+                continue
 
-#             # Require c3 to be a doji (body/true range < DOJI_THRESHOLD)
-#             if not is_doji(c3):
-#                 print(f"[DETECTOR] Pattern {pid}: c3 not doji → discarded")
-#                 to_remove.append(pid)
-#                 continue
+            # Require c3 to be a doji (body/true range < DOJI_THRESHOLD)
+            if not is_doji(c3):
+                print(f"[DETECTOR] Pattern {pid}: c3 not doji → discarded")
+                to_remove.append(pid)
+                continue
 
-#             # Success → emit trade signal
-#             signal = {
-#                 "pattern_id": pid,
-#                 "symbol": c3["symbol"],
-#                 "c1": pat["c1"],
-#                 "c2": c2,
-#                 "c3": c3,
-#                 "created_at": datetime.utcnow(),
-#                 "type": "010_doji"
-#             }
-#             self.db.insert_trade_signal(signal)
-#             print(f"[DETECTOR] Pattern {pid}: 010+doji → trade signal emitted")
-#             to_remove.append(pid)
+            # Success → emit trade signal
+            signal = {
+                "pattern_id": pid,
+                "symbol": c3["symbol"],
+                "c1": pat["c1"],
+                "c2": c2,
+                "c3": c3,
+                "created_at": datetime.utcnow(),
+                "type": "010_doji"
+            }
+            self.db.insert_trade_signal(signal)
+            print(f"[DETECTOR] Pattern {pid}: 010+doji → trade signal emitted")
+            to_remove.append(pid)
 
-#         # Remove processed or discarded patterns
-#         for pid in to_remove:
-#             del self.active_patterns[pid]
+        # Remove processed or discarded patterns
+        for pid in to_remove:
+            del self.active_patterns[pid]
 
-#     async def run(self):
-#         """
-#         Main loop: periodically check for new patterns and evaluate
-#         existing ones.  Runs forever.
-#         """
-#         while True:
-#             try:
-#                 await self.check_new_pattern()
-#                 await self.monitor_active_patterns()
-#             except Exception as exc:
-#                 print(f"[DETECTOR] Error: {exc}")
-#             # Sleep for a fraction of 30 minutes (e.g. every 5 minutes)
-#             await asyncio.sleep(300)
+    async def run(self):
+        """
+        Main loop: periodically check for new patterns and evaluate
+        existing ones.  Runs forever.
+        """
+        while True:
+            try:
+                await self.check_new_pattern()
+                await self.monitor_active_patterns()
+            except Exception as exc:
+                print(f"[DETECTOR] Error: {exc}")
+            # Sleep for a fraction of 30 minutes (e.g. every 5 minutes)
+            await asyncio.sleep(300)
 
-# if __name__ == "__main__":
-#     detector = PatternDetector()
-#     asyncio.run(detector.run())
+if __name__ == "__main__":
+    detector = PatternDetector()
+    asyncio.run(detector.run())
 
 
 

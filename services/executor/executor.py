@@ -26,6 +26,97 @@ async def check_signals():
         await execute_trade(signal)
         db.mark_signal_processed(signal['_id'])
 
+# async def execute_trade(signal):
+#     """Execute trade from signal"""
+#     global executing
+    
+#     if executing:
+#         print("[EXECUTOR] ⚠️  Already executing - skipping")
+#         return
+    
+#     executing = True
+    
+#     try:
+#         c3 = signal['c3']
+        
+#         # Get real balance
+#         balance = await api.get_balance()
+#         print(f"[EXECUTOR] 💰 Balance: ${balance:.2f}")
+        
+#         # Calculate stake
+#         stake = calculate_stake(balance)
+#         print(f"[EXECUTOR] 📊 Stake: ${stake:.2f}")
+        
+#         # Calculate entry params
+#         entry = c3['close']
+#         doji_low = c3['low']
+#         doji_high = c3['high']
+#         doji_range = c3['range']
+        
+#         # Calculate SL with buffer
+#         sl = doji_low - (config.SL_BUFFER_PCT * doji_range)
+#         tp = doji_high
+        
+#         # Calculate multiplier
+#         multiplier = calculate_multiplier(entry, sl, stake)
+        
+#         if multiplier is None:
+#             print("[EXECUTOR] ⚠️  No valid multiplier - skipping")
+#             return
+        
+#         print(f"[EXECUTOR] 🎯 Trade params:")
+#         print(f"   Entry: {entry:.5f}")
+#         print(f"   SL: {sl:.5f}")
+#         print(f"   TP: {tp:.5f}")
+#         print(f"   Multiplier: {multiplier}x")
+#         print(f"   Stake: ${stake:.2f}")
+        
+#         # Place trade
+#         contract = await api.buy_contract(
+#             symbol=config.SYMBOL,
+#             amount=stake,
+#             multiplier=multiplier,
+#             limit_order={
+#                 "stop_loss": sl,
+#                 "take_profit": tp
+#             }
+#         )
+        
+#         if not contract:
+#             print("[EXECUTOR] ❌ Trade placement failed")
+#             return
+        
+#         contract_id = contract.get('contract_id')
+        
+#         # Save trade record
+#         trade = {
+#             'contract_id': contract_id,
+#             'pattern_id': signal['pattern_id'],
+#             'symbol': config.SYMBOL,
+#             'entry_time': datetime.utcnow(),
+#             'entry_price': entry,
+#             'sl': sl,
+#             'tp': tp,
+#             'stake': stake,
+#             'multiplier': multiplier,
+#             'status': 'OPEN',
+#             'balance_before': balance,
+#             'c1': signal['c1'],
+#             'c2': signal['c2'],
+#             'c3': signal['c3']
+#         }
+        
+#         db.save_trade(trade)
+        
+#         print(f"[EXECUTOR] ✅ TRADE PLACED: {contract_id}")
+#         print(f"[EXECUTOR] 🚀 Entry: {entry:.5f} | SL: {sl:.5f} | TP: {tp:.5f}")
+        
+#     except Exception as e:
+#         print(f"[EXECUTOR] ❌ Error: {e}")
+    
+#     finally:
+#         executing = False
+
 async def execute_trade(signal):
     """Execute trade from signal"""
     global executing
@@ -38,6 +129,12 @@ async def execute_trade(signal):
     
     try:
         c3 = signal['c3']
+        
+        # Determine direction from signal
+        direction = signal.get('direction', 1)  # 1=bullish, 0=bearish
+        contract_type = "MULTUP" if direction == 1 else "MULTDOWN"
+        
+        print(f"[EXECUTOR] 📊 Direction: {'BULLISH' if direction == 1 else 'BEARISH'}")
         
         # Get real balance
         balance = await api.get_balance()
@@ -53,32 +150,27 @@ async def execute_trade(signal):
         doji_high = c3['high']
         doji_range = c3['range']
         
-        # Calculate SL with buffer
-        sl = doji_low - (config.SL_BUFFER_PCT * doji_range)
-        tp = doji_high
-        
-        # Calculate multiplier
-        multiplier = calculate_multiplier(entry, sl, stake)
-        
-        if multiplier is None:
-            print("[EXECUTOR] ⚠️  No valid multiplier - skipping")
-            return
+        # SL/TP in USD (positive values)
+        sl_usd = 10.0
+        tp_usd = 15.0
         
         print(f"[EXECUTOR] 🎯 Trade params:")
+        print(f"   Type: {contract_type}")
         print(f"   Entry: {entry:.5f}")
-        print(f"   SL: {sl:.5f}")
-        print(f"   TP: {tp:.5f}")
-        print(f"   Multiplier: {multiplier}x")
+        print(f"   SL: ${sl_usd}")
+        print(f"   TP: ${tp_usd}")
+        print(f"   Multiplier: 200x")
         print(f"   Stake: ${stake:.2f}")
         
-        # Place trade
+        # Place trade - need to modify deriv_api to accept contract_type
         contract = await api.buy_contract(
             symbol=config.SYMBOL,
             amount=stake,
-            multiplier=multiplier,
+            multiplier=200,
+            contract_type=contract_type,  # Pass direction
             limit_order={
-                "stop_loss": sl,
-                "take_profit": tp
+                "stop_loss": sl_usd,
+                "take_profit": tp_usd
             }
         )
         
@@ -93,12 +185,14 @@ async def execute_trade(signal):
             'contract_id': contract_id,
             'pattern_id': signal['pattern_id'],
             'symbol': config.SYMBOL,
+            'direction': direction,
+            'contract_type': contract_type,
             'entry_time': datetime.utcnow(),
             'entry_price': entry,
-            'sl': sl,
-            'tp': tp,
+            'sl': sl_usd,
+            'tp': tp_usd,
             'stake': stake,
-            'multiplier': multiplier,
+            'multiplier': 200,
             'status': 'OPEN',
             'balance_before': balance,
             'c1': signal['c1'],
@@ -109,7 +203,7 @@ async def execute_trade(signal):
         db.save_trade(trade)
         
         print(f"[EXECUTOR] ✅ TRADE PLACED: {contract_id}")
-        print(f"[EXECUTOR] 🚀 Entry: {entry:.5f} | SL: {sl:.5f} | TP: {tp:.5f}")
+        print(f"[EXECUTOR] 🚀 {contract_type} | Entry: {entry:.5f} | SL: ${sl_usd} | TP: ${tp_usd}")
         
     except Exception as e:
         print(f"[EXECUTOR] ❌ Error: {e}")
@@ -217,7 +311,7 @@ async def main():
     # Run both tasks
     await asyncio.gather(
         signal_checker(),
-        portfolio_monitor()
+        # portfolio_monitor()
     )
 
 if __name__ == '__main__':
