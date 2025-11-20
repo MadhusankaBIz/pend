@@ -117,9 +117,10 @@ async def check_signals():
 #     finally:
 #         executing = False
 
+
 async def execute_trade(signal):
     """Execute trade from signal"""
-    global executing
+    global executing, api
     
     if executing:
         print("[EXECUTOR] ⚠️  Already executing - skipping")
@@ -128,6 +129,11 @@ async def execute_trade(signal):
     executing = True
     
     try:
+        # Initialize API if needed
+        if api is None:
+            print("[EXECUTOR] 🔌 Initializing API...")
+            api = DerivAPI(use_auth=True)
+        
         c3 = signal['c3']
         
         # Determine direction from signal
@@ -272,9 +278,13 @@ async def on_position_closed(contract_id, position):
 
 async def signal_checker():
     """Check for signals every 10 seconds"""
+    print("[EXECUTOR] 🔍 Signal checker loop started")
+    
     while True:
         try:
+            print("[EXECUTOR] 🔎 Checking for signals...")
             await check_signals()
+            print("[EXECUTOR] ✓ Check complete")
         except Exception as e:
             print(f"[EXECUTOR] Signal checker error: {e}")
         
@@ -306,60 +316,10 @@ async def main():
     print(f"[EXECUTOR] Base stake: ${config.BASE_STAKE}")
     
     # Initialize API with auth
-    api = DerivAPI(use_auth=True)
+    # api = DerivAPI(use_auth=True)
     
-    # Run both tasks
-    await asyncio.gather(
-        signal_checker(),
-        # portfolio_monitor()
-    )
+    # Run signal checker only
+    await signal_checker()
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
-
-
-## **COMPLETE FILE TREE:**
-# ```
-# deriv_bot/
-# ├── docker-compose.yml           ✅
-# ├── .env.demo                    ✅
-# ├── .env.live                    ✅
-# ├── .gitignore                   ✅
-# │
-# ├── services/
-# │   ├── ingestor/
-# │   │   ├── Dockerfile           ✅
-# │   │   ├── requirements.txt     ✅
-# │   │   └── ingestor.py          ✅
-# │   │
-# │   ├── backfill/
-# │   │   ├── Dockerfile           ✅
-# │   │   ├── requirements.txt     ✅
-# │   │   └── backfill.py          ✅
-# │   │
-# │   ├── aggregator/
-# │   │   ├── Dockerfile           ✅
-# │   │   ├── requirements.txt     ✅
-# │   │   └── aggregator.py        ✅
-# │   │
-# │   ├── detector/
-# │   │   ├── Dockerfile           ✅
-# │   │   ├── requirements.txt     ✅
-# │   │   └── detector.py          ✅
-# │   │
-# │   └── executor/
-# │       ├── Dockerfile           ✅
-# │       ├── requirements.txt     ✅
-# │       └── executor.py          ✅
-# │
-# ├── shared/
-# │   ├── __init__.py              ✅
-# │   ├── config.py                ✅
-# │   ├── mongo_client.py          ✅
-# │   ├── deriv_api.py             ✅
-# │   └── calculator.py            ✅
-# │
-# └── data/
-#     └── .gitkeep                 ✅
