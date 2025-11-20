@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: deriv_db
+    restart: unless-stopped
+    volumes:
+      - ./data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - deriv_net
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ingestor:
+    build: ./services/ingestor
+    container_name: deriv_ingestor
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      DB_NAME: deriv_trading
+      SYMBOL: R_50
+      WS_URL: wss://ws.derivws.com/websockets/v3?app_id=1089
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - deriv_net
+    volumes:
+      - ./shared:/app/shared
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  backfill:
+    build: ./services/backfill
+    container_name: deriv_backfill
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      DB_NAME: deriv_trading
+      SYMBOL: R_50
+      WS_URL: wss://ws.derivws.com/websockets/v3?app_id=1089
+      CHECK_INTERVAL: 1200
+      LOOKBACK_MINUTES: 60
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - deriv_net
+    volumes:
+      - ./shared:/app/shared
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  aggregator:
+    build: ./services/aggregator
+    container_name: deriv_aggregator
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      DB_NAME: deriv_trading
+      SYMBOL: R_50
+      CHECK_INTERVAL: 60
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - deriv_net
+    volumes:
+      - ./shared:/app/shared
+
+  detector:
+    build: ./services/detector
+    container_name: deriv_detector
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      DB_NAME: deriv_trading
+      SYMBOL: R_50
+      CHECK_INTERVAL: 60
+      DOJI_THRESHOLD: 0.85
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - deriv_net
+    volumes:
+      - ./shared:/app/shared
+
+  executor:
+    build: ./services/executor
+    container_name: deriv_executor
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-.env.demo}
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      DB_NAME: deriv_trading
+      SYMBOL: R_50
+      BASE_STAKE: 15.0
+      STAKE_INCREMENT: 2.5
+      PROFIT_MILESTONE: 500.0
+      BREATHING_MULTIPLE: 1.7
+      SL_BUFFER_PCT: 0.01
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - deriv_net
+    volumes:
+      - ./shared:/app/shared
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+networks:
+  deriv_net:
+    driver: bridge

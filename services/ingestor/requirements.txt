@@ -1,0 +1,2 @@
+pymongo
+websockets==12.0
