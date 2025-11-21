@@ -118,8 +118,110 @@ async def check_signals():
 #         executing = False
 
 
+# async def execute_trade(signal):
+#     """Execute trade from signal"""
+#     global executing, api
+    
+#     if executing:
+#         print("[EXECUTOR] ⚠️  Already executing - skipping")
+#         return
+    
+#     executing = True
+    
+#     try:
+#         # Initialize API if needed
+#         if api is None:
+#             print("[EXECUTOR] 🔌 Initializing API...")
+#             api = DerivAPI(use_auth=True)
+#             print(f"[EXECUTOR] 🔍 API module: {api.__class__.__module__}")
+        
+#         c3 = signal['c3']
+        
+#         # Determine direction from signal
+#         direction = signal.get('direction', 1)  # 1=bullish, 0=bearish
+#         contract_type = "MULTUP" if direction == 1 else "MULTDOWN"
+        
+#         print(f"[EXECUTOR] 📊 Direction: {'BULLISH' if direction == 1 else 'BEARISH'}")
+        
+#         # Get real balance
+#         balance = await api.get_balance()
+#         print(f"[EXECUTOR] 💰 Balance: ${balance:.2f}")
+        
+#         # Calculate stake
+#         stake = calculate_stake(balance)
+#         print(f"[EXECUTOR] 📊 Stake: ${stake:.2f}")
+        
+#         # Calculate entry params
+#         entry = c3['close']
+#         doji_low = c3['low']
+#         doji_high = c3['high']
+#         doji_range = c3['range']
+        
+#         # SL/TP in USD (positive values)
+#         sl_usd = 10.0
+#         tp_usd = 15.0
+        
+#         print(f"[EXECUTOR] 🎯 Trade params:")
+#         print(f"   Type: {contract_type}")
+#         print(f"   Entry: {entry:.5f}")
+#         print(f"   SL: ${sl_usd}")
+#         print(f"   TP: ${tp_usd}")
+#         print(f"   Multiplier: 200x")
+#         print(f"   Stake: ${stake:.2f}")
+        
+#         # Place trade
+#         contract = await api.buy_contract(
+#             symbol=config.SYMBOL,
+#             amount=stake,
+#             multiplier=200,
+#             contract_type=contract_type,
+#             limit_order={
+#                 "stop_loss": sl_usd,
+#                 "take_profit": tp_usd
+#             }
+#         )
+        
+#         if not contract:
+#             print("[EXECUTOR] ❌ Trade placement failed")
+#             return
+        
+#         contract_id = contract.get('contract_id')
+        
+#         # Save trade record
+#         trade = {
+#             'contract_id': contract_id,
+#             'pattern_id': signal['pattern_id'],
+#             'symbol': config.SYMBOL,
+#             'direction': direction,
+#             'contract_type': contract_type,
+#             'entry_time': datetime.utcnow(),
+#             'entry_price': entry,
+#             'sl': sl_usd,
+#             'tp': tp_usd,
+#             'stake': stake,
+#             'multiplier': 200,
+#             'status': 'OPEN',
+#             'balance_before': balance,
+#             'c1': signal['c1'],
+#             'c2': signal['c2'],
+#             'c3': signal['c3']
+#         }
+        
+#         db.save_trade(trade)
+        
+#         print(f"[EXECUTOR] ✅ TRADE PLACED: {contract_id}")
+#         print(f"[EXECUTOR] 🚀 {contract_type} | Entry: {entry:.5f} | SL: ${sl_usd} | TP: ${tp_usd}")
+        
+#     except Exception as e:
+#         print(f"[EXECUTOR] ❌ Error: {e}")
+#         import traceback
+#         traceback.print_exc()
+    
+#     finally:
+#         executing = False
+
 async def execute_trade(signal):
-    """Execute trade from signal"""
+    """Execute trade from signal with breathing room risk management"""
     global executing, api
     
     if executing:
@@ -136,44 +238,68 @@ async def execute_trade(signal):
         
         c3 = signal['c3']
         
-        # Determine direction from signal
-        direction = signal.get('direction', 1)  # 1=bullish, 0=bearish
+        # 010+doji pattern is always bearish (MULTDOWN)
+        direction = signal.get('direction', 0)
         contract_type = "MULTUP" if direction == 1 else "MULTDOWN"
         
         print(f"[EXECUTOR] 📊 Direction: {'BULLISH' if direction == 1 else 'BEARISH'}")
         
-        # Get real balance
+        # Get balance and calculate stake
         balance = await api.get_balance()
-        print(f"[EXECUTOR] 💰 Balance: ${balance:.2f}")
-        
-        # Calculate stake
         stake = calculate_stake(balance)
-        print(f"[EXECUTOR] 📊 Stake: ${stake:.2f}")
+        print(f"[EXECUTOR] 💰 Balance: ${balance:.2f} | Stake: ${stake:.2f}")
         
-        # Calculate entry params
+        # Extract candle data
         entry = c3['close']
         doji_low = c3['low']
         doji_high = c3['high']
         doji_range = c3['range']
         
-        # SL/TP in USD (positive values)
-        sl_usd = 10.0
-        tp_usd = 15.0
+        # Calculate SL/TP prices with buffer (EXACT research logic)
+        sl_price = doji_low - (config.SL_BUFFER_PCT * doji_range)
+        tp_price = doji_high
         
-        print(f"[EXECUTOR] 🎯 Trade params:")
-        print(f"   Type: {contract_type}")
-        print(f"   Entry: {entry:.5f}")
-        print(f"   SL: ${sl_usd}")
-        print(f"   TP: ${tp_usd}")
-        print(f"   Multiplier: 200x")
-        print(f"   Stake: ${stake:.2f}")
+        # Calculate multiplier using breathing room formula
+        # This ensures: Loss at SL ≈ stake / BREATHING_MULTIPLE
+        multiplier = calculate_multiplier(entry, sl_price, stake)
         
-        # Place trade - need to modify deriv_api to accept contract_type
+        if multiplier is None:
+            print("[EXECUTOR] ⚠️  No valid multiplier - skipping trade")
+            executing = False
+            return
+        
+        # Convert price-based SL/TP to USD amounts for Deriv API
+        sl_distance = entry - sl_price
+        tp_distance = tp_price - entry
+        
+        sl_pct = sl_distance / entry
+        tp_pct = tp_distance / entry
+        
+        # Deriv formula: P&L = percentage × stake × multiplier
+        sl_usd = round(stake * multiplier * sl_pct, 2)
+        tp_usd = round(stake * multiplier * tp_pct, 2)
+        
+        # Cap SL at 95% of stake (safety, shouldn't trigger with breathing room)
+        sl_usd = min(sl_usd, stake * 0.95)
+        
+        # Calculate expected loss (breathing room verification)
+        expected_loss_usd = stake / config.BREATHING_MULTIPLE
+        
+        print(f"[EXECUTOR] 🎯 Trade Setup:")
+        print(f"   Entry:           {entry:.5f}")
+        print(f"   SL Price:        {sl_price:.5f} (dist: {sl_distance:.5f} = {sl_pct*100:.3f}%)")
+        print(f"   TP Price:        {tp_price:.5f} (dist: {tp_distance:.5f} = {tp_pct*100:.3f}%)")
+        print(f"   Multiplier:      {multiplier}x")
+        print(f"   SL USD:          ${sl_usd:.2f} (expected: ${expected_loss_usd:.2f})")
+        print(f"   TP USD:          ${tp_usd:.2f}")
+        print(f"   Risk/Reward:     1:{(tp_usd/sl_usd if sl_usd > 0 else 0):.2f}")
+        
+        # Place trade
         contract = await api.buy_contract(
             symbol=config.SYMBOL,
             amount=stake,
-            multiplier=200,
-            contract_type=contract_type,  # Pass direction
+            multiplier=multiplier,
+            contract_type=contract_type,
             limit_order={
                 "stop_loss": sl_usd,
                 "take_profit": tp_usd
@@ -182,6 +308,7 @@ async def execute_trade(signal):
         
         if not contract:
             print("[EXECUTOR] ❌ Trade placement failed")
+            executing = False
             return
         
         contract_id = contract.get('contract_id')
@@ -195,10 +322,12 @@ async def execute_trade(signal):
             'contract_type': contract_type,
             'entry_time': datetime.utcnow(),
             'entry_price': entry,
-            'sl': sl_usd,
-            'tp': tp_usd,
+            'sl_price': sl_price,
+            'tp_price': tp_price,
+            'sl_usd': sl_usd,
+            'tp_usd': tp_usd,
             'stake': stake,
-            'multiplier': 200,
+            'multiplier': multiplier,
             'status': 'OPEN',
             'balance_before': balance,
             'c1': signal['c1'],
@@ -209,10 +338,12 @@ async def execute_trade(signal):
         db.save_trade(trade)
         
         print(f"[EXECUTOR] ✅ TRADE PLACED: {contract_id}")
-        print(f"[EXECUTOR] 🚀 {contract_type} | Entry: {entry:.5f} | SL: ${sl_usd} | TP: ${tp_usd}")
+        print(f"[EXECUTOR] 🚀 {contract_type} {multiplier}x | SL: ${sl_usd} | TP: ${tp_usd}")
         
     except Exception as e:
         print(f"[EXECUTOR] ❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
     
     finally:
         executing = False
